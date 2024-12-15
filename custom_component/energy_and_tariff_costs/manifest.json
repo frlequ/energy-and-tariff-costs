@@ -3,7 +3,7 @@
   "name": "Energy & Tariff Costs",
   "version": "1.0",
   "requirements": [],
-  "dependencies": [],
+  "dependencies": ["recorder"],
   "codeowners": ["@frlequ"],
   "documentation": "https://github.com/energy_and_tariff_costs",
   "config_flow": true,
