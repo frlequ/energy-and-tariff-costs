@@ -1,0 +1,3 @@
+### Energy and Tariff Costs calculator for Home Assistant
+
+Alpha release...
