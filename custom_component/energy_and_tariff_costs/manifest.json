@@ -4,7 +4,7 @@
   "codeowners": ["@frlequ"],
   "config_flow": true,
   "dependencies": ["recorder"],
-  "documentation": "https://github.com/energy_and_tariff_costs",
+  "documentation": "https://github.com/energy-and-tariff-costs",
   "iot_class": "local_polling",
   "requirements": [],
   "version": "1.0"
