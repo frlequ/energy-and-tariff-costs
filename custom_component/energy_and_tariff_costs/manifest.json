@@ -1,0 +1,11 @@
+{
+  "domain": "energy_and_tariff_costs",
+  "name": "Energy & Tariff Costs",
+  "version": "1.0",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@frlequ"],
+  "documentation": "https://github.com/your-repo",
+  "config_flow": true,
+  "iot_class": "local_polling"
+}
