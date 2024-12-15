@@ -1,4 +1,4 @@
-DOMAIN = "elektro_costs"
+DOMAIN = "energy_and_tariff_costs"
 
 VT_PRICE = "vt_price"
 MT_PRICE = "mt_price"
