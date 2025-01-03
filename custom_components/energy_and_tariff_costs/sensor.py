@@ -152,9 +152,9 @@ class BaseCostSensor(SensorEntity):
         """Return device information for the sensor."""
         return {
             "identifiers": {tuple(self._device_identifiers)},  # e.g., {('unique_device_identifier',)}
-            "name": "Energy Costs Device",
-            "manufacturer": "Test Manufacturer",
-            "model": "Test Model",
+            "name": "Energy & Tariff Costs",
+            "manufacturer": "Energy & Tariff Costs",
+            "model": "Beta",
         }
 
     @property
@@ -199,10 +199,12 @@ class BaseCostSensor(SensorEntity):
 
     async def _get_monthly_sum_if_daily_sensor(self, sensor_id: str) -> Optional[float]:
         """
-        Sum the monthly consumption from a daily sensor, ignoring the first value of each day 
-        if a second value exists.
+        Sum the monthly consumption from a daily sensor by using only the last state of each day.
+        Ignores all other states within the same day.
         """
-        if not sensor_id.startswith(f"sensor.moj_elektro_daily_input_"):
+        DAILY_SENSOR_PREFIX = "sensor.moj_elektro_daily_input_"
+        
+        if not sensor_id.startswith(DAILY_SENSOR_PREFIX):
             _LOGGER.debug("Sensor %s is not a daily sensor", sensor_id)
             return None  # Not a daily sensor
 
@@ -243,34 +245,36 @@ class BaseCostSensor(SensorEntity):
         total = 0.0
         for day, day_states in states_by_day.items():
             _LOGGER.debug("Processing day: %s with %d states", day, len(day_states))
-            if len(day_states) > 1:
-                _LOGGER.debug(
-                    "Multiple states found for %s on %s. Ignoring the first state.", 
-                    sensor_id, day
-                )
-                # Ignore the first state
-                states_to_sum = day_states[1:]
+            
+            if not day_states:
+                _LOGGER.debug("No states to process for %s on %s", sensor_id, day)
+                continue  # Skip days with no states
+
+            # Identify the last state of the day based on last_changed timestamp
+            last_state = max(day_states, key=lambda s: s.last_changed)
+            _LOGGER.debug(
+                "Last state for %s on %s: %s", 
+                sensor_id, day, last_state.state
+            )
+
+            if last_state.state not in (None, "unknown", "unavailable"):
+                try:
+                    val = float(last_state.state)
+                    total += val
+                    _LOGGER.debug(
+                        "Added value %f from sensor %s on %s", 
+                        val, sensor_id, day
+                    )
+                except ValueError:
+                    _LOGGER.error(
+                        "Invalid state value '%s' in sensor %s on %s", 
+                        last_state.state, sensor_id, day
+                    )
             else:
                 _LOGGER.debug(
-                    "Single state found for %s on %s. Including it in the sum.", 
-                    sensor_id, day
+                    "Ignoring state '%s' for sensor %s on %s", 
+                    last_state.state, sensor_id, day
                 )
-                states_to_sum = day_states
-
-            for s in states_to_sum:
-                if s.state not in (None, "unknown", "unavailable"):
-                    try:
-                        val = float(s.state)
-                        total += val
-                        _LOGGER.debug(
-                            "Added value %f from sensor %s on %s", 
-                            val, sensor_id, day
-                        )
-                    except ValueError:
-                        _LOGGER.error(
-                            "Invalid state value '%s' in sensor %s on %s", 
-                            s.state, sensor_id, day
-                        )
 
         _LOGGER.debug("Monthly sum for sensor %s: %f", sensor_id, total)
         return total

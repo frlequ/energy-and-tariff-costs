@@ -1,10 +1,12 @@
+# number.py
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from .const import (
-    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX,ADDITIONAL_PRICE,
+    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE,
     BLOK_1_CONS_PRICE, BLOK_2_CONS_PRICE, BLOK_3_CONS_PRICE, BLOK_4_CONS_PRICE, BLOK_5_CONS_PRICE,
     BLOK_1_TAR_PRICE, BLOK_2_TAR_PRICE, BLOK_3_TAR_PRICE, BLOK_4_TAR_PRICE, BLOK_5_TAR_PRICE
 )
@@ -12,31 +14,29 @@ from .const import (
 def friendly_name_from_id(name: str) -> str:
     return name.replace("_", " ").title()
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback
+):
     data = hass.data[DOMAIN][entry.entry_id]
     device_identifiers = data["device_identifiers"]
 
-
     to_create = [
-        (VT_PRICE, data["vt_price_initial"]),
-        (MT_PRICE, data["mt_price_initial"]),
-        (TAX, data["tax_initial"]),
-
-        (BLOK_1_CONS_PRICE, data["blok_1_consumption_price_initial"]),
-        (BLOK_2_CONS_PRICE, data["blok_2_consumption_price_initial"]),
-        (BLOK_3_CONS_PRICE, data["blok_3_consumption_price_initial"]),
-        (BLOK_4_CONS_PRICE, data["blok_4_consumption_price_initial"]),
-        (BLOK_5_CONS_PRICE, data["blok_5_consumption_price_initial"]),
-
-        (BLOK_1_TAR_PRICE, data["blok_1_tariff_price_initial"]),
-        (BLOK_2_TAR_PRICE, data["blok_2_tariff_price_initial"]),
-        (BLOK_3_TAR_PRICE, data["blok_3_tariff_price_initial"]),
-        (BLOK_4_TAR_PRICE, data["blok_4_tariff_price_initial"]),
-        (BLOK_5_TAR_PRICE, data["blok_5_tariff_price_initial"]),
-        
-        (ADDITIONAL_PRICE, data["additional_price_initial"])
-        
-        
+        (VT_PRICE, data[VT_PRICE]),
+        (MT_PRICE, data[MT_PRICE]),
+        (TAX, data[TAX]),
+        (ADDITIONAL_PRICE, data[ADDITIONAL_PRICE]),
+        (BLOK_1_CONS_PRICE, data[BLOK_1_CONS_PRICE]),
+        (BLOK_2_CONS_PRICE, data[BLOK_2_CONS_PRICE]),
+        (BLOK_3_CONS_PRICE, data[BLOK_3_CONS_PRICE]),
+        (BLOK_4_CONS_PRICE, data[BLOK_4_CONS_PRICE]),
+        (BLOK_5_CONS_PRICE, data[BLOK_5_CONS_PRICE]),
+        (BLOK_1_TAR_PRICE, data[BLOK_1_TAR_PRICE]),
+        (BLOK_2_TAR_PRICE, data[BLOK_2_TAR_PRICE]),
+        (BLOK_3_TAR_PRICE, data[BLOK_3_TAR_PRICE]),
+        (BLOK_4_TAR_PRICE, data[BLOK_4_TAR_PRICE]),
+        (BLOK_5_TAR_PRICE, data[BLOK_5_TAR_PRICE]),
     ]
 
     entities = [
@@ -47,7 +47,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entities, True)
 
 class EnergyCostNumber(NumberEntity, RestoreEntity):
-    def __init__(self, entry: ConfigEntry, name: str, initial_value: float, device_identifiers):
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        name: str,
+        initial_value: float,
+        device_identifiers
+    ):
         self._entry = entry
         self._name_id = name
         self.entity_id = f"number.{INITIALS}_{name}"
@@ -62,8 +68,6 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
         self._attr_max_value = 10.0
         self._attr_step = 0.0001
         self._attr_icon = "mdi:currency-eur"
-        
-        # Don't set self._state here; wait for restore or fallback to initial value in async_added_to_hass
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
@@ -79,7 +83,8 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
             self._state = self._initial_value
 
     @property
-    def state(self):
+    def native_value(self) -> float:
+        """Return the current value."""
         return self._state
 
     @property
@@ -91,6 +96,14 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
             "model": "Beta",
         }
 
-    async def async_set_value(self, value: float):
+    async def async_set_native_value(self, value: float):
+        """Set the new value."""
         self._state = value
         self.async_write_ha_state()
+        # Here you can add any additional logic needed when the value is set,
+        # such as updating `hass.data` or interacting with other components.
+
+    # Optional: If you prefer to use async_set_value instead of async_set_native_value
+    async def async_set_value(self, value: float):
+        """Set the new value."""
+        await self.async_set_native_value(value)
