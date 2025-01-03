@@ -2,7 +2,6 @@
 # Energy and Tariff Costs
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![HACS Status](https://img.shields.io/badge/HACS-Default-orange.svg)
 ![Last Commit](https://img.shields.io/github/last-commit/frlequ/energy-and-tariff-costs)
 
 A Home Assistant integration for calculating and displaying monthly energy and tariff costs based on Moje Elektro's energy distribution and tariff block usage. Customize your pricing inputs for different tariff blocks and energy consumption, and add additional costs based on your energy provider.
