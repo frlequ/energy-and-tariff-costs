@@ -1,6 +1,7 @@
 ### Energy and Tariff Costs calculator for Home Assistant
 
-Beta release... still in dev.
+Beta release... still in dev. To test, you'll need a [Latest release of Home Assistant Mojelektro Component ](https://github.com/frlequ/homeassistant-mojelektro)
+
 
 ## Screenshots
 
