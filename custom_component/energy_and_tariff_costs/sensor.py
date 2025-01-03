@@ -1,6 +1,8 @@
+# sensor.py
+
 import logging
 from collections import defaultdict
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -9,9 +11,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.util import dt as dt_util
+from homeassistant.components.sensor import SensorStateClass
 
 from .const import (
-    DOMAIN, VT_PRICE, MT_PRICE, TAX,
+    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE,
     BLOK_1_CONS_PRICE, BLOK_2_CONS_PRICE, BLOK_3_CONS_PRICE, BLOK_4_CONS_PRICE, BLOK_5_CONS_PRICE,
     BLOK_1_TAR_PRICE, BLOK_2_TAR_PRICE, BLOK_3_TAR_PRICE, BLOK_4_TAR_PRICE, BLOK_5_TAR_PRICE,
     MOJELEKTRO_PEAK, MOJELEKTRO_OFFPEAK,
@@ -38,16 +41,16 @@ async def async_setup_entry(
 
     # Initialize VT and MT cost sensors
     vt_sensor = SimpleCostSensor(
-        hass, entry, "vt_cost", device_identifiers,
+        hass, entry, "energy_high_tariff_cost", device_identifiers,
         consumption_sensor=MOJELEKTRO_PEAK, price_name=VT_PRICE, tax_name=TAX,
         cost_formula=lambda cons, price, tax: cons * price * (1 + tax / 100)
     )
     mt_sensor = SimpleCostSensor(
-        hass, entry, "mt_cost", device_identifiers,
+        hass, entry, "energy_low_tariff_cost", device_identifiers,
         consumption_sensor=MOJELEKTRO_OFFPEAK, price_name=MT_PRICE, tax_name=TAX,
         cost_formula=lambda cons, price, tax: cons * price * (1 + tax / 100)
     )
-    _LOGGER.debug("Initialized VT and MT cost sensors")
+    _LOGGER.debug("Initialized high_tariff and low_tariff cost sensors")
 
     # Initialize tariff cost sensors
     tariff_definitions = [
@@ -83,8 +86,15 @@ async def async_setup_entry(
     ]
     _LOGGER.debug("Initialized consumption cost sensors: %s", [sensor.name for sensor in consumption_sensors])
 
+    # Initialize Additional Cost Sensor
+    additional_cost_sensor = AdditionalCostSensor(
+        hass, entry, "additional_cost", device_identifiers,
+        price_name=ADDITIONAL_PRICE, tax_name=TAX
+    )
+    _LOGGER.debug("Initialized additional cost sensor: %s", additional_cost_sensor.name)
+
     # Initialize Total Cost Sensor
-    all_cost_sensors = [vt_sensor, mt_sensor] + tariff_sensors + consumption_sensors
+    all_cost_sensors = [vt_sensor, mt_sensor] + tariff_sensors + consumption_sensors + [additional_cost_sensor]
     total_sensor = TotalCostSensor(
         hass, entry, "total_cost", device_identifiers, all_cost_sensors
     )
@@ -92,7 +102,7 @@ async def async_setup_entry(
 
     # Add all entities to Home Assistant
     async_add_entities(
-        [vt_sensor, mt_sensor, total_sensor] + tariff_sensors + consumption_sensors, 
+        [vt_sensor, mt_sensor, total_sensor] + tariff_sensors + consumption_sensors + [additional_cost_sensor], 
         True
     )
     _LOGGER.info("Added all cost sensors to Home Assistant")
@@ -105,41 +115,60 @@ class BaseCostSensor(SensorEntity):
         hass: HomeAssistant, 
         entry: ConfigEntry, 
         name: str, 
-        device_identifiers
+        device_identifiers: List[str]
     ):
         """Initialize the BaseCostSensor."""
+        super().__init__()
         self._hass = hass
         self._entry = entry
-        self._entity_name = name
-        self._attr_name = friendly_name_from_id(name)
-        self._attr_unique_id = f"{entry.entry_id}_{name}"
+        self._entity_name = name # e.g., "blok_1_tariff_cost"
+        self.entity_id = f"sensor.{INITIALS}_{name}"  # e.g., "sensor.etc_blok_1_tariff_cost"
+        self._attr_name = friendly_name_from_id(name)  # e.g., "Blok 1 Tariff Cost"
+        self._attr_unique_id = f"{entry.entry_id}_etc_{name}"  # Ensure uniqueness
         self._device_identifiers = device_identifiers
-        self._state = None
+        self._state: Optional[float] = None
         self._attr_unit_of_measurement = "€"
-        _LOGGER.debug("Initialized BaseCostSensor: %s", self._attr_unique_id)
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:currency-eur"
+        _LOGGER.debug("Initialized BaseCostSensor with unique_id: %s", self.unique_id)
 
     @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
+    def name(self) -> str:
+        """Return the friendly name of the sensor."""
+        return self._attr_name
 
     @property
-    def device_info(self):
+    def unique_id(self) -> str:
+        """Return the unique ID of the sensor."""
+        return self._attr_unique_id
+
+    @property
+    def object_id(self) -> str:
+        """Return the object ID of the sensor, including INITIALS."""
+        return self._entity_name.lower()
+
+    @property
+    def device_info(self) -> dict:
         """Return device information for the sensor."""
         return {
-            "identifiers": {self._device_identifiers},
+            "identifiers": {tuple(self._device_identifiers)},  # e.g., {('unique_device_identifier',)}
             "name": "Energy Costs Device",
             "manufacturer": "Test Manufacturer",
             "model": "Test Model",
         }
 
+    @property
+    def state(self) -> Optional[float]:
+        """Return the state of the sensor."""
+        return self._state
+
     def _valid_state(self, state) -> bool:
         """Check if the state is valid."""
         valid = state is not None and state.state not in (None, "unknown", "unavailable")
-        _LOGGER.debug("Validating state for entity %s: %s", self._attr_unique_id, valid)
+        _LOGGER.debug("Validating state for entity %s: %s", self.unique_id, valid)
         return valid
 
-    def _get_number_value(self, name):
+    def _get_number_value(self, name: str) -> Optional[float]:
         """Retrieve a numerical value from a sensor by name."""
         entity_id = self._find_entity_id(name)
         if not entity_id:
@@ -157,7 +186,7 @@ class BaseCostSensor(SensorEntity):
             _LOGGER.error("Invalid state value for %s: %s", name, s.state)
             return None
 
-    def _find_entity_id(self, name):
+    def _find_entity_id(self, name: str) -> Optional[str]:
         """Find the entity ID based on a unique name."""
         entity_registry = er.async_get(self._hass)
         unique_id = f"{self._entry.entry_id}_{name}"
@@ -173,7 +202,7 @@ class BaseCostSensor(SensorEntity):
         Sum the monthly consumption from a daily sensor, ignoring the first value of each day 
         if a second value exists.
         """
-        if not sensor_id.startswith("sensor.moj_elektro_daily_input_"):
+        if not sensor_id.startswith(f"sensor.moj_elektro_daily_input_"):
             _LOGGER.debug("Sensor %s is not a daily sensor", sensor_id)
             return None  # Not a daily sensor
 
@@ -327,6 +356,50 @@ class SimpleCostSensor(BaseCostSensor):
             )
             self._state = None
 
+class AdditionalCostSensor(BaseCostSensor):
+    """Sensor that represents the additional fixed price with tax."""
+
+    def __init__(
+        self, 
+        hass: HomeAssistant, 
+        entry: ConfigEntry, 
+        name: str, 
+        device_identifiers, 
+        price_name: str, 
+        tax_name: str
+    ):
+        """Initialize the AdditionalCostSensor."""
+        super().__init__(hass, entry, name, device_identifiers)
+        self._price_name = price_name
+        self._tax_name = tax_name
+        _LOGGER.debug("Initialized AdditionalCostSensor: %s", self._attr_unique_id)
+
+    async def async_update(self):
+        """Fetch new state data for the additional cost sensor."""
+        _LOGGER.debug("Updating AdditionalCostSensor: %s", self._attr_unique_id)
+        price = self._get_number_value(self._price_name)
+        tax = self._get_number_value(self._tax_name)
+
+        if price is None or tax is None:
+            _LOGGER.error(
+                "Price or tax value missing for AdditionalCostSensor: %s", 
+                self._attr_unique_id
+            )
+            self._state = None
+            return
+
+        try:
+            cost = price * (1 + tax / 100)
+            self._state = round(cost, 4)
+            _LOGGER.info("Updated additional cost sensor %s: %f", self._attr_unique_id, self._state)
+        except Exception as e:
+            _LOGGER.error(
+                "Error calculating additional cost sensor %s: %s", 
+                self._attr_unique_id, 
+                e
+            )
+            self._state = None
+
 class TotalCostSensor(SensorEntity):
     """Sensor that sums all individual cost sensors."""
 
@@ -342,12 +415,15 @@ class TotalCostSensor(SensorEntity):
         self._hass = hass
         self._entry = entry
         self._entity_name = name
+        self.entity_id = f"sensor.{INITIALS}_{name}"
         self._attr_name = friendly_name_from_id(name)
         self._attr_unique_id = f"{entry.entry_id}_{name}"
         self._device_identifiers = device_identifiers
         self._sensors = sensors
         self._attr_unit_of_measurement = "€"
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._state = None
+        self._attr_icon = "mdi:currency-eur"
         _LOGGER.debug("Initialized TotalCostSensor: %s", self._attr_unique_id)
 
     @property

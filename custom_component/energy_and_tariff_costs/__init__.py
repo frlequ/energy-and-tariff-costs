@@ -28,6 +28,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         "vt_price_initial": 0.084000,
         "mt_price_initial": 0.070000,
         "tax_initial": 22.0,
+        "additional_price_initial": 1.96,
 
         "blok_1_consumption_price_initial": 0.019580,
         "blok_2_consumption_price_initial": 0.018440,

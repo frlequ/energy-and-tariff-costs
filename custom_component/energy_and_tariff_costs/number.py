@@ -4,7 +4,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from .const import (
-    DOMAIN, VT_PRICE, MT_PRICE, TAX,
+    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX,ADDITIONAL_PRICE,
     BLOK_1_CONS_PRICE, BLOK_2_CONS_PRICE, BLOK_3_CONS_PRICE, BLOK_4_CONS_PRICE, BLOK_5_CONS_PRICE,
     BLOK_1_TAR_PRICE, BLOK_2_TAR_PRICE, BLOK_3_TAR_PRICE, BLOK_4_TAR_PRICE, BLOK_5_TAR_PRICE
 )
@@ -32,7 +32,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         (BLOK_2_TAR_PRICE, data["blok_2_tariff_price_initial"]),
         (BLOK_3_TAR_PRICE, data["blok_3_tariff_price_initial"]),
         (BLOK_4_TAR_PRICE, data["blok_4_tariff_price_initial"]),
-        (BLOK_5_TAR_PRICE, data["blok_5_tariff_price_initial"])
+        (BLOK_5_TAR_PRICE, data["blok_5_tariff_price_initial"]),
+        
+        (ADDITIONAL_PRICE, data["additional_price_initial"])
+        
+        
     ]
 
     entities = [
@@ -46,6 +50,7 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
     def __init__(self, entry: ConfigEntry, name: str, initial_value: float, device_identifiers):
         self._entry = entry
         self._name_id = name
+        self.entity_id = f"number.{INITIALS}_{name}"
         self._initial_value = initial_value
         self._state = None  # Will set on async_added_to_hass
         self._device_identifiers = device_identifiers
@@ -56,7 +61,8 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
         self._attr_min_value = 0.0
         self._attr_max_value = 10.0
         self._attr_step = 0.0001
-
+        self._attr_icon = "mdi:currency-eur"
+        
         # Don't set self._state here; wait for restore or fallback to initial value in async_added_to_hass
 
     async def async_added_to_hass(self):

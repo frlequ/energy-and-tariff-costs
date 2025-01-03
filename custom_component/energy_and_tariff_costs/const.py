@@ -1,8 +1,10 @@
 DOMAIN = "energy_and_tariff_costs"
+INITIALS = "etc"
 
-VT_PRICE = "vt_price"
-MT_PRICE = "mt_price"
+VT_PRICE = "energy_high_tariff_price"
+MT_PRICE = "energy_low_tariff_price"
 TAX = "tax"
+ADDITIONAL_PRICE = "additional_price"
 
 BLOK_1_CONS_PRICE = "blok_1_consumption_price"
 BLOK_2_CONS_PRICE = "blok_2_consumption_price"
@@ -16,8 +18,8 @@ BLOK_3_TAR_PRICE = "blok_3_tariff_price"
 BLOK_4_TAR_PRICE = "blok_4_tariff_price"
 BLOK_5_TAR_PRICE = "blok_5_tariff_price"
 
-MOJELEKTRO_PEAK = "sensor.mojelektro_monthly_input_peak"
-MOJELEKTRO_OFFPEAK = "sensor.mojelektro_monthly_input_offpeak"
+MOJELEKTRO_PEAK = "sensor.moj_elektro_monthly_input_peak"
+MOJELEKTRO_OFFPEAK = "sensor.moj_elektro_monthly_input_offpeak"
 
 # New block sensors
 MOJELEKTRO_BLOK_1 = "sensor.moj_elektro_casovni_blok_1"
