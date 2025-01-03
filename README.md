@@ -1,6 +1,11 @@
 ### Energy and Tariff Costs calculator for Home Assistant
 
-Alpha release...
+Beta release... still in dev.
+
+## Screenshots
+
+![Screenshot Controls.](/assets/energy_and_tariff_costs_controls.jpg)
+![Screenshot Sensors.](/assets/energy_and_tariff_costs_sensors.jpg)
 
 
 ## Installation
