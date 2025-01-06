@@ -17,10 +17,9 @@ A Home Assistant integration for calculating and displaying monthly energy and t
   - [Manual Installation](#manual-installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
-- [Customization](#customization)
-- [Contributing](#contributing)
-- [License](#license)
-- [Links](#links)
+- [Screenshots](#screenshots)
+- [Report issues](#report-any-issues)
+
 
 ## Features
 
@@ -78,7 +77,10 @@ A Home Assistant integration for calculating and displaying monthly energy and t
 
 ## Usage
 
-Once configured, the integration will display your monthly energy and tariff costs on your Home Assistant dashboard. You can customize the display using various Lovelace cards to fit your preferences.
+Once configured, the integration will display your monthly energy and tariff costs on your Home Assistant dashboard. You can customize the display using various Lovelace cards. Additionally, you can set custom prices for each tariff block and energy consumption level, allowing you to tailor the cost calculation to your specific pricing plan. 
+
+> [!NOTE]
+> Current prices are set based on Gen-I provider (Januar 2025).
 
 ## Screenshots
 
