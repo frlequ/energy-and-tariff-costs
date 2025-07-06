@@ -71,8 +71,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         BLOK_5_TAR_PRICE: BLOK_5_TAR_PRICE_INITIAL,
     }
 
-    await hass.config_entries.async_forward_entry_setup(entry, "number")
-    await hass.config_entries.async_forward_entry_setup(entry, "sensor")
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "number"])
+    
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
