@@ -1,20 +1,20 @@
 # sensor.py
 
 import logging
-from collections import defaultdict
-from typing import Optional, Callable, List
+from datetime import datetime, timedelta
+from typing import Optional, Callable, List, Tuple
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.recorder import get_instance
+from homeassistant.components.recorder.statistics import statistic_during_period
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.components.recorder.history import get_significant_states
 from homeassistant.util import dt as dt_util
-from homeassistant.components.sensor import SensorStateClass
 
 from .const import (
-    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE,
+    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE, CONTRIB_PRICE,
     BLOK_1_CONS_PRICE, BLOK_2_CONS_PRICE, BLOK_3_CONS_PRICE, BLOK_4_CONS_PRICE, BLOK_5_CONS_PRICE,
     BLOK_1_TAR_PRICE, BLOK_2_TAR_PRICE, BLOK_3_TAR_PRICE, BLOK_4_TAR_PRICE, BLOK_5_TAR_PRICE,
     MOJELEKTRO_PEAK, MOJELEKTRO_OFFPEAK,
@@ -22,16 +22,54 @@ from .const import (
     MOJELEKTRO_DAILY_BLOK_1, MOJELEKTRO_DAILY_BLOK_2, MOJELEKTRO_DAILY_BLOK_3, MOJELEKTRO_DAILY_BLOK_4, MOJELEKTRO_DAILY_BLOK_5
 )
 
-# Initialize logger
+
+SCAN_INTERVAL = timedelta(hours=1)
+
+DAILY_SENSOR_PREFIX = "sensor.moj_elektro_daily_input_"
+
+# Months in the "higher season" (winter) of the network tariff calendar.
+# Winter bills blocks 1-4, the lower season (summer) bills blocks 2-5.
+WINTER_MONTHS = {11, 12, 1, 2}
+
 _LOGGER = logging.getLogger(__name__)
+
 
 def friendly_name_from_id(name: str) -> str:
     """Convert an entity ID to a friendly name."""
     return name.replace("_", " ").title()
 
+
+def billing_window(now: Optional[datetime] = None) -> Tuple[datetime, datetime, datetime]:
+    """Return (reference_date, start, end) of the billing month whose data is arriving now.
+
+    Moj Elektro delivers day D's data on day D+1 (around 06:00), and the
+    monthly peak/offpeak sensors roll over on the 2nd. So:
+      * the month being billed is the month of (now - 1 day),
+      * its block data arrives from the 2nd of that month 00:00
+        until the 2nd of the next month 00:00.
+    Example: at 1 Oct 07:00 this returns September, window 2 Sep 00:00 - now,
+    which already includes 30 Sep's data.
+    """
+    now = now or dt_util.now()
+    ref = now - timedelta(days=1)
+    month_start = ref.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_month_start = (month_start + timedelta(days=32)).replace(day=1)
+    start = month_start + timedelta(days=1)
+    end = min(now, next_month_start + timedelta(days=1))
+    return ref, start, end
+
+
+def active_blocks(now: Optional[datetime] = None) -> set:
+    """Return which network-tariff blocks are billed for the current billing month."""
+    ref, _, _ = billing_window(now)
+    if ref.month in WINTER_MONTHS:
+        return {1, 2, 3, 4}
+    return {2, 3, 4, 5}
+
+
 async def async_setup_entry(
-    hass: HomeAssistant, 
-    entry: ConfigEntry, 
+    hass: HomeAssistant,
+    entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback
 ):
     """Set up sensors from a config entry."""
@@ -39,7 +77,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     device_identifiers = data["device_identifiers"]
 
-    # Initialize VT and MT cost sensors
+    # Energy (supplier) cost sensors
     vt_sensor = SimpleCostSensor(
         hass, entry, "energy_high_tariff_cost", device_identifiers,
         consumption_sensor=MOJELEKTRO_PEAK, price_name=VT_PRICE, tax_name=TAX,
@@ -50,9 +88,9 @@ async def async_setup_entry(
         consumption_sensor=MOJELEKTRO_OFFPEAK, price_name=MT_PRICE, tax_name=TAX,
         cost_formula=lambda cons, price, tax: cons * price * (1 + tax / 100)
     )
-    _LOGGER.debug("Initialized high_tariff and low_tariff cost sensors")
 
-    # Initialize tariff cost sensors
+    # Network tariff (agreed power) sensors. All 5 blocks are always created;
+    # TotalCostSensor decides which ones are billed this month.
     tariff_definitions = [
         ("blok_1_tariff_cost", MOJELEKTRO_BLOK_1, BLOK_1_TAR_PRICE),
         ("blok_2_tariff_cost", MOJELEKTRO_BLOK_2, BLOK_2_TAR_PRICE),
@@ -67,9 +105,8 @@ async def async_setup_entry(
             cost_formula=lambda cons, price, tax: cons * price * (1 + tax / 100)
         ) for (name, consumption_sensor, price_name) in tariff_definitions
     ]
-    _LOGGER.debug("Initialized tariff cost sensors: %s", [sensor.name for sensor in tariff_sensors])
 
-    # Initialize consumption cost sensors
+    # Network consumption sensors (monthly kWh per block, from statistics)
     consumption_defs = [
         ("blok_1_consumption_cost", MOJELEKTRO_DAILY_BLOK_1, BLOK_1_CONS_PRICE),
         ("blok_2_consumption_cost", MOJELEKTRO_DAILY_BLOK_2, BLOK_2_CONS_PRICE),
@@ -84,74 +121,83 @@ async def async_setup_entry(
             cost_formula=lambda cons, price, tax: cons * price * (1 + tax / 100)
         ) for (name, daily_sensor, price_name) in consumption_defs
     ]
-    _LOGGER.debug("Initialized consumption cost sensors: %s", [sensor.name for sensor in consumption_sensors])
 
-    # Initialize Additional Cost Sensor
+    # Fixed monthly costs (OVE/SPTE + monthly fee - discounts)
     additional_cost_sensor = AdditionalCostSensor(
         hass, entry, "additional_cost", device_identifiers,
         price_name=ADDITIONAL_PRICE, tax_name=TAX
     )
-    _LOGGER.debug("Initialized additional cost sensor: %s", additional_cost_sensor.name)
 
-    # Initialize Total Cost Sensor
-    all_cost_sensors = [vt_sensor, mt_sensor] + tariff_sensors + consumption_sensors + [additional_cost_sensor]
-    total_sensor = TotalCostSensor(
-        hass, entry, "total_cost", device_identifiers, all_cost_sensors
+    # Per-kWh contributions on total consumption (market operator,
+    # energy efficiency, excise)
+    contributions_sensor = ContributionsCostSensor(
+        hass, entry, "contributions_cost", device_identifiers,
+        consumption_sensors=[MOJELEKTRO_PEAK, MOJELEKTRO_OFFPEAK],
+        price_name=CONTRIB_PRICE, tax_name=TAX
     )
-    _LOGGER.debug("Initialized Total Cost Sensor")
 
-    # Add all entities to Home Assistant
+    # Sensors that are ALWAYS included in the total, regardless of season
+    always_sensors = [vt_sensor, mt_sensor, additional_cost_sensor, contributions_sensor]
+
+    # Block sensors tagged with their block number (1-5)
+    block_sensors = [
+        (1, tariff_sensors[0]), (2, tariff_sensors[1]), (3, tariff_sensors[2]),
+        (4, tariff_sensors[3]), (5, tariff_sensors[4]),
+        (1, consumption_sensors[0]), (2, consumption_sensors[1]), (3, consumption_sensors[2]),
+        (4, consumption_sensors[3]), (5, consumption_sensors[4]),
+    ]
+
+    total_sensor = TotalCostSensor(
+        hass, entry, "total_cost", device_identifiers, always_sensors, block_sensors
+    )
+
     async_add_entities(
-        [vt_sensor, mt_sensor, total_sensor] + tariff_sensors + consumption_sensors + [additional_cost_sensor], 
+        [vt_sensor, mt_sensor, total_sensor] + tariff_sensors + consumption_sensors
+        + [additional_cost_sensor, contributions_sensor],
         True
     )
     _LOGGER.info("Added all cost sensors to Home Assistant")
 
+
 class BaseCostSensor(SensorEntity):
-    """Base class with logic to handle daily vs monthly sensors by summing daily sensor values for the month."""
+    """Base class with shared helpers for all cost sensors."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        entry: ConfigEntry, 
-        name: str, 
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        name: str,
         device_identifiers: List[str]
     ):
-        """Initialize the BaseCostSensor."""
         super().__init__()
         self._hass = hass
         self._entry = entry
-        self._entity_name = name # e.g., "blok_1_tariff_cost"
-        self.entity_id = f"sensor.{INITIALS}_{name}"  # e.g., "sensor.etc_blok_1_tariff_cost"
-        self._attr_name = friendly_name_from_id(name)  # e.g., "Blok 1 Tariff Cost"
-        self._attr_unique_id = f"{entry.entry_id}_etc_{name}"  # Ensure uniqueness
+        self._entity_name = name  # e.g. "blok_1_tariff_cost"
+        self.entity_id = f"sensor.{INITIALS}_{name}"  # e.g. "sensor.etc_blok_1_tariff_cost"
+        self._attr_name = friendly_name_from_id(name)
+        self._attr_unique_id = f"{entry.entry_id}_etc_{name}"
         self._device_identifiers = device_identifiers
         self._state: Optional[float] = None
         self._attr_unit_of_measurement = "€"
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:currency-eur"
-        _LOGGER.debug("Initialized BaseCostSensor with unique_id: %s", self.unique_id)
 
     @property
     def name(self) -> str:
-        """Return the friendly name of the sensor."""
         return self._attr_name
 
     @property
     def unique_id(self) -> str:
-        """Return the unique ID of the sensor."""
         return self._attr_unique_id
 
     @property
     def object_id(self) -> str:
-        """Return the object ID of the sensor, including INITIALS."""
         return self._entity_name.lower()
 
     @property
     def device_info(self) -> dict:
-        """Return device information for the sensor."""
         return {
-            "identifiers": {tuple(self._device_identifiers)},  # e.g., {('unique_device_identifier',)}
+            "identifiers": {tuple(self._device_identifiers)},
             "name": "Energy & Tariff Costs",
             "manufacturer": "Energy & Tariff Costs",
             "model": "Beta",
@@ -159,263 +205,195 @@ class BaseCostSensor(SensorEntity):
 
     @property
     def state(self) -> Optional[float]:
-        """Return the state of the sensor."""
         return self._state
 
     def _valid_state(self, state) -> bool:
-        """Check if the state is valid."""
-        valid = state is not None and state.state not in (None, "unknown", "unavailable")
-        _LOGGER.debug("Validating state for entity %s: %s", self.unique_id, valid)
-        return valid
+        return state is not None and state.state not in (None, "unknown", "unavailable")
 
     def _get_number_value(self, name: str) -> Optional[float]:
-        """Retrieve a numerical value from a sensor by name."""
+        """Retrieve a numeric value from one of this integration's number entities."""
         entity_id = self._find_entity_id(name)
         if not entity_id:
             _LOGGER.warning("Entity ID not found for name: %s", name)
             return None
         s = self._hass.states.get(entity_id)
         if s is None or s.state in (None, "unknown", "unavailable"):
-            _LOGGER.warning("State unavailable for entity: %s", entity_id)
             return None
         try:
-            value = float(s.state)
-            _LOGGER.debug("Retrieved value for %s: %f", name, value)
-            return value
+            return float(s.state)
         except ValueError:
             _LOGGER.error("Invalid state value for %s: %s", name, s.state)
             return None
 
     def _find_entity_id(self, name: str) -> Optional[str]:
-        """Find the entity ID based on a unique name."""
-        entity_registry = er.async_get(self._hass)
-        unique_id = f"{self._entry.entry_id}_{name}"
-        for entity_id, ent in entity_registry.entities.items():
-            if ent.unique_id == unique_id:
-                _LOGGER.debug("Found entity ID %s for unique ID %s", entity_id, unique_id)
-                return entity_id
-        _LOGGER.warning("Entity ID not found for unique ID: %s", unique_id)
-        return None
+        """Find the entity ID of a number entity by its unique ID."""
+        registry = er.async_get(self._hass)
+        return registry.async_get_entity_id("number", DOMAIN, f"{self._entry.entry_id}_{name}")
 
-    async def _get_monthly_sum_if_daily_sensor(self, sensor_id: str) -> Optional[float]:
-        """
-        Sum the monthly consumption from a daily sensor by using only the last state of each day.
-        Ignores all other states within the same day.
-        """
-        DAILY_SENSOR_PREFIX = "sensor.moj_elektro_daily_input_"
-        
-        if not sensor_id.startswith(DAILY_SENSOR_PREFIX):
-            _LOGGER.debug("Sensor %s is not a daily sensor", sensor_id)
-            return None  # Not a daily sensor
-
-        now = dt_util.now()
-        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_time = now
-
-        _LOGGER.debug(
-            "Fetching significant states for sensor %s from %s to %s", 
-            sensor_id, start_of_month, end_time
-        )
-
+    def _get_sensor_float(self, entity_id: str) -> Optional[float]:
+        state = self._hass.states.get(entity_id)
+        if not self._valid_state(state):
+            return None
         try:
-            states = await self._hass.async_add_executor_job(
-                get_significant_states,
-                self._hass,
-                start_of_month,
-                end_time,
-                [sensor_id],
-                None,
-                True
-            )
-            _LOGGER.debug("Retrieved states for sensor %s", sensor_id)
-        except Exception as e:
-            _LOGGER.error("Error fetching states for sensor %s: %s", sensor_id, e)
+            return float(state.state)
+        except ValueError:
+            _LOGGER.error("Invalid state value for %s: %s", entity_id, state.state)
             return None
 
-        if not states or sensor_id not in states:
-            _LOGGER.info("No states found for sensor %s", sensor_id)
+    async def _get_monthly_sum_if_daily_sensor(self, sensor_id: str) -> Optional[float]:
+        """Monthly kWh of a daily Moj Elektro sensor, read from long-term statistics.
+
+        Returns None if sensor_id is not a daily sensor (caller then uses its
+        state directly). Statistics are used instead of state history because
+        they survive recorder purging and already handle the midnight resets
+        of total_increasing sensors.
+        """
+        if not sensor_id.startswith(DAILY_SENSOR_PREFIX):
+            return None
+
+        _, start, end = billing_window()
+        if end <= start:
             return 0.0
 
-        # Group states by day
-        states_by_day = defaultdict(list)
-        for state in states[sensor_id]:
-            day = state.last_changed.date()
-            states_by_day[day].append(state)
-
-        total = 0.0
-        for day, day_states in states_by_day.items():
-            _LOGGER.debug("Processing day: %s with %d states", day, len(day_states))
-            
-            if not day_states:
-                _LOGGER.debug("No states to process for %s on %s", sensor_id, day)
-                continue  # Skip days with no states
-
-            # Identify the last state of the day based on last_changed timestamp
-            last_state = max(day_states, key=lambda s: s.last_changed)
-            _LOGGER.debug(
-                "Last state for %s on %s: %s", 
-                sensor_id, day, last_state.state
+        try:
+            stats = await get_instance(self._hass).async_add_executor_job(
+                statistic_during_period,
+                self._hass, start, end, sensor_id, {"change"}, None,
             )
+        except Exception as e:
+            _LOGGER.error("Statistics query failed for %s: %s", sensor_id, e)
+            return None
 
-            if last_state.state not in (None, "unknown", "unavailable"):
-                try:
-                    val = float(last_state.state)
-                    total += val
-                    _LOGGER.debug(
-                        "Added value %f from sensor %s on %s", 
-                        val, sensor_id, day
-                    )
-                except ValueError:
-                    _LOGGER.error(
-                        "Invalid state value '%s' in sensor %s on %s", 
-                        last_state.state, sensor_id, day
-                    )
-            else:
-                _LOGGER.debug(
-                    "Ignoring state '%s' for sensor %s on %s", 
-                    last_state.state, sensor_id, day
-                )
+        change = stats.get("change") if stats else None
+        _LOGGER.debug(
+            "Monthly change for %s (%s - %s): %s kWh", sensor_id, start, end, change
+        )
+        return float(change) if change is not None else 0.0
 
-        _LOGGER.debug("Monthly sum for sensor %s: %f", sensor_id, total)
-        return total
 
 class SimpleCostSensor(BaseCostSensor):
-    """Cost sensor that computes cost from a consumption sensor, price, and tax."""
+    """Cost = consumption x price x (1 + tax)."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        entry: ConfigEntry, 
-        name: str, 
-        device_identifiers, 
-        consumption_sensor: str, 
-        price_name: str, 
-        tax_name: str, 
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        name: str,
+        device_identifiers,
+        consumption_sensor: str,
+        price_name: str,
+        tax_name: str,
         cost_formula: Callable
     ):
-        """Initialize the SimpleCostSensor."""
         super().__init__(hass, entry, name, device_identifiers)
         self._consumption_sensor = consumption_sensor
         self._price_name = price_name
         self._tax_name = tax_name
         self._cost_formula = cost_formula
-        _LOGGER.debug(
-            "Initialized SimpleCostSensor: %s with consumption_sensor: %s, price_name: %s, tax_name: %s",
-            self._attr_unique_id, self._consumption_sensor, self._price_name, self._tax_name
-        )
 
     async def async_update(self):
-        """Fetch new state data for the sensor."""
-        _LOGGER.debug("Updating sensor: %s", self._attr_unique_id)
         monthly_sum = await self._get_monthly_sum_if_daily_sensor(self._consumption_sensor)
         if monthly_sum is not None:
-            # Use monthly_sum for consumption
             consumption = monthly_sum
-            _LOGGER.debug("Using monthly sum for consumption: %f", consumption)
+        elif self._consumption_sensor.startswith(DAILY_SENSOR_PREFIX):
+            # Daily sensor whose statistics query failed
+            self._state = None
+            return
         else:
-            # Not a daily sensor, use current state directly
-            consumption_state = self._hass.states.get(self._consumption_sensor)
-            if not self._valid_state(consumption_state):
-                _LOGGER.warning(
-                    "Invalid consumption state for sensor %s", 
-                    self._consumption_sensor
-                )
-                self._state = None
-                return
-            try:
-                consumption = float(consumption_state.state)
-                _LOGGER.debug("Using direct consumption value: %f", consumption)
-            except ValueError:
-                _LOGGER.error(
-                    "Invalid consumption state value for sensor %s: %s", 
-                    self._consumption_sensor, 
-                    consumption_state.state
-                )
+            consumption = self._get_sensor_float(self._consumption_sensor)
+            if consumption is None:
+                _LOGGER.warning("Invalid consumption state for sensor %s", self._consumption_sensor)
                 self._state = None
                 return
 
         price = self._get_number_value(self._price_name)
         tax = self._get_number_value(self._tax_name)
         if price is None or tax is None:
-            _LOGGER.error(
-                "Price or tax value missing for sensor %s", 
-                self._attr_unique_id
-            )
+            # Normal right after startup, before number entities restored their value
             self._state = None
             return
 
         try:
-            cost = self._cost_formula(consumption, price, tax)
-            self._state = round(cost, 4)
-            _LOGGER.info(
-                "Updated cost for sensor %s: %f", 
-                self._attr_unique_id, 
-                self._state
-            )
+            self._state = round(self._cost_formula(consumption, price, tax), 4)
         except Exception as e:
-            _LOGGER.error(
-                "Error calculating cost for sensor %s: %s", 
-                self._attr_unique_id, 
-                e
-            )
+            _LOGGER.error("Error calculating cost for sensor %s: %s", self._attr_unique_id, e)
             self._state = None
 
+
 class AdditionalCostSensor(BaseCostSensor):
-    """Sensor that represents the additional fixed price with tax."""
+    """Fixed monthly price with tax."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        entry: ConfigEntry, 
-        name: str, 
-        device_identifiers, 
-        price_name: str, 
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        name: str,
+        device_identifiers,
+        price_name: str,
         tax_name: str
     ):
-        """Initialize the AdditionalCostSensor."""
         super().__init__(hass, entry, name, device_identifiers)
         self._price_name = price_name
         self._tax_name = tax_name
-        _LOGGER.debug("Initialized AdditionalCostSensor: %s", self._attr_unique_id)
 
     async def async_update(self):
-        """Fetch new state data for the additional cost sensor."""
-        _LOGGER.debug("Updating AdditionalCostSensor: %s", self._attr_unique_id)
         price = self._get_number_value(self._price_name)
         tax = self._get_number_value(self._tax_name)
-
         if price is None or tax is None:
-            _LOGGER.error(
-                "Price or tax value missing for AdditionalCostSensor: %s", 
-                self._attr_unique_id
-            )
             self._state = None
             return
+        self._state = round(price * (1 + tax / 100), 4)
 
-        try:
-            cost = price * (1 + tax / 100)
-            self._state = round(cost, 4)
-            _LOGGER.info("Updated additional cost sensor %s: %f", self._attr_unique_id, self._state)
-        except Exception as e:
-            _LOGGER.error(
-                "Error calculating additional cost sensor %s: %s", 
-                self._attr_unique_id, 
-                e
-            )
-            self._state = None
 
-class TotalCostSensor(SensorEntity):
-    """Sensor that sums all individual cost sensors."""
+class ContributionsCostSensor(BaseCostSensor):
+    """Per-kWh contributions on total monthly consumption (sum of several sensors)."""
 
     def __init__(
-        self, 
-        hass: HomeAssistant, 
-        entry: ConfigEntry, 
-        name: str, 
-        device_identifiers, 
-        sensors
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        name: str,
+        device_identifiers,
+        consumption_sensors: List[str],
+        price_name: str,
+        tax_name: str
     ):
-        """Initialize the TotalCostSensor."""
+        super().__init__(hass, entry, name, device_identifiers)
+        self._consumption_sensors = consumption_sensors
+        self._price_name = price_name
+        self._tax_name = tax_name
+
+    async def async_update(self):
+        total_kwh = 0.0
+        for sensor_id in self._consumption_sensors:
+            value = self._get_sensor_float(sensor_id)
+            if value is None:
+                _LOGGER.warning("Invalid consumption state for sensor %s", sensor_id)
+                self._state = None
+                return
+            total_kwh += value
+
+        price = self._get_number_value(self._price_name)
+        tax = self._get_number_value(self._tax_name)
+        if price is None or tax is None:
+            self._state = None
+            return
+        self._state = round(total_kwh * price * (1 + tax / 100), 4)
+
+
+class TotalCostSensor(SensorEntity):
+    """Sum of all cost sensors, billing only the blocks active for the billing month
+    (winter: blocks 1-4, summer: blocks 2-5)."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        name: str,
+        device_identifiers,
+        always_sensors,
+        block_sensors,
+    ):
         self._hass = hass
         self._entry = entry
         self._entity_name = name
@@ -423,21 +401,30 @@ class TotalCostSensor(SensorEntity):
         self._attr_name = friendly_name_from_id(name)
         self._attr_unique_id = f"{entry.entry_id}_{name}"
         self._device_identifiers = device_identifiers
-        self._sensors = sensors
+        self._always_sensors = always_sensors
+        self._block_sensors = block_sensors  # list of (block_number, sensor)
         self._attr_unit_of_measurement = "€"
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._state = None
         self._attr_icon = "mdi:currency-eur"
-        _LOGGER.debug("Initialized TotalCostSensor: %s", self._attr_unique_id)
+        self._active = set()
 
     @property
     def state(self):
-        """Return the state of the sensor."""
         return self._state
 
     @property
+    def extra_state_attributes(self):
+        ref, start, end = billing_window()
+        return {
+            "billing_month": ref.strftime("%Y-%m"),
+            "active_blocks": sorted(self._active),
+            "window_start": start.isoformat(),
+            "window_end": end.isoformat(),
+        }
+
+    @property
     def device_info(self):
-        """Return device information for the sensor."""
         return {
             "identifiers": {self._device_identifiers},
             "name": "Energy & Tariff Costs",
@@ -446,18 +433,23 @@ class TotalCostSensor(SensorEntity):
         }
 
     async def async_update(self):
-        """Fetch new state data for the total cost sensor."""
-        _LOGGER.debug("Updating TotalCostSensor: %s", self._attr_unique_id)
-        # Update all individual sensors first
-        for sensor in self._sensors:
+        # Refresh everything so all sensors (also inactive blocks) stay current
+        for sensor in self._always_sensors:
+            await sensor.async_update()
+        for _, sensor in self._block_sensors:
             await sensor.async_update()
 
-        costs = [sensor.state for sensor in self._sensors]
+        self._active = active_blocks()
+
+        costs = [sensor.state for sensor in self._always_sensors]
+        costs += [
+            sensor.state
+            for block_num, sensor in self._block_sensors
+            if block_num in self._active
+        ]
+
         if any(c is None for c in costs):
-            _LOGGER.warning(
-                "One or more sensor states are None. Total cost cannot be calculated."
-            )
+            _LOGGER.warning("One or more cost sensors have no value; total not calculated")
             self._state = None
         else:
             self._state = round(sum(costs), 4)
-            _LOGGER.info("Updated total cost: %f", self._state)

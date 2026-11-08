@@ -9,6 +9,7 @@ from .const import (
     MT_PRICE,
     TAX,
     ADDITIONAL_PRICE,
+    CONTRIB_PRICE,
     BLOK_1_CONS_PRICE,
     BLOK_2_CONS_PRICE,
     BLOK_3_CONS_PRICE,
@@ -23,6 +24,7 @@ from .const import (
     MT_PRICE_INITIAL,
     TAX_INITIAL,
     ADDITIONAL_PRICE_INITIAL,
+    CONTRIB_PRICE_INITIAL,
     BLOK_1_CONS_PRICE_INITIAL,
     BLOK_2_CONS_PRICE_INITIAL,
     BLOK_3_CONS_PRICE_INITIAL,
@@ -57,6 +59,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         MT_PRICE: MT_PRICE_INITIAL,
         TAX: TAX_INITIAL,
         ADDITIONAL_PRICE: ADDITIONAL_PRICE_INITIAL,
+        CONTRIB_PRICE: CONTRIB_PRICE_INITIAL,
 
         BLOK_1_CONS_PRICE: BLOK_1_CONS_PRICE_INITIAL,
         BLOK_2_CONS_PRICE: BLOK_2_CONS_PRICE_INITIAL,
@@ -72,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "number"])
-    
+
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
