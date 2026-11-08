@@ -6,7 +6,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from .const import (
-    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE,
+    DOMAIN, INITIALS, VT_PRICE, MT_PRICE, TAX, ADDITIONAL_PRICE, CONTRIB_PRICE,
     BLOK_1_CONS_PRICE, BLOK_2_CONS_PRICE, BLOK_3_CONS_PRICE, BLOK_4_CONS_PRICE, BLOK_5_CONS_PRICE,
     BLOK_1_TAR_PRICE, BLOK_2_TAR_PRICE, BLOK_3_TAR_PRICE, BLOK_4_TAR_PRICE, BLOK_5_TAR_PRICE
 )
@@ -27,6 +27,7 @@ async def async_setup_entry(
         (MT_PRICE, data[MT_PRICE]),
         (TAX, data[TAX]),
         (ADDITIONAL_PRICE, data[ADDITIONAL_PRICE]),
+        (CONTRIB_PRICE, data[CONTRIB_PRICE]),
         (BLOK_1_CONS_PRICE, data[BLOK_1_CONS_PRICE]),
         (BLOK_2_CONS_PRICE, data[BLOK_2_CONS_PRICE]),
         (BLOK_3_CONS_PRICE, data[BLOK_3_CONS_PRICE]),
@@ -64,9 +65,10 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
         self._attr_unique_id = f"{entry.entry_id}_{name}"
         self._attr_name = friendly_name_from_id(name)
         self._attr_mode = NumberMode.BOX
-        self._attr_min_value = 0.0
-        self._attr_max_value = 10.0
-        self._attr_step = 0.0001
+        self._attr_native_min_value = 0.0
+        self._attr_native_max_value = 100.0  # tax is entered in %, e.g. 22
+        # Network prices are published with 5 decimals (e.g. 0.01998, 0.77562)
+        self._attr_native_step = 0.00001
         self._attr_icon = "mdi:currency-eur"
 
     async def async_added_to_hass(self):
@@ -100,10 +102,3 @@ class EnergyCostNumber(NumberEntity, RestoreEntity):
         """Set the new value."""
         self._state = value
         self.async_write_ha_state()
-        # Here you can add any additional logic needed when the value is set,
-        # such as updating `hass.data` or interacting with other components.
-
-    # Optional: If you prefer to use async_set_value instead of async_set_native_value
-    async def async_set_value(self, value: float):
-        """Set the new value."""
-        await self.async_set_native_value(value)
