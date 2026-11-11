@@ -48,8 +48,8 @@ BLOK_4_TAR_PRICE_INITIAL = 0.02436
 BLOK_5_TAR_PRICE_INITIAL = 0.00245
 
 # Sensor Definitions
-MOJELEKTRO_PEAK = "sensor.mojelektro_monthly_input_peak"
-MOJELEKTRO_OFFPEAK = "sensor.mojelektro_monthly_input_offpeak"
+MOJELEKTRO_PEAK = "sensor.moj_elektro_monthly_input_peak"
+MOJELEKTRO_OFFPEAK = "sensor.moj_elektro_monthly_input_offpeak"
 
 # New Block Sensors (agreed power per block, kW)
 MOJELEKTRO_BLOK_1 = "sensor.moj_elektro_casovni_blok_1"
